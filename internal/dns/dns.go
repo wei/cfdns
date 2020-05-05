@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"sync"
 
 	"github.com/qdm12/cloudflare-dns-server/internal/models"
 	"github.com/qdm12/golibs/command"
@@ -23,11 +24,12 @@ type Configurator interface {
 }
 
 type configurator struct {
-	logger      logging.Logger
-	client      network.Client
-	fileManager files.FileManager
-	commander   command.Commander
-	lookupIP    func(host string) ([]net.IP, error)
+	logger                logging.Logger
+	client                network.Client
+	fileManager           files.FileManager
+	commander             command.Commander
+	lookupIP              func(host string) ([]net.IP, error)
+	internalResolverMutex sync.Mutex
 }
 
 func NewConfigurator(logger logging.Logger, client network.Client, fileManager files.FileManager) Configurator {
