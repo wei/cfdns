@@ -2,7 +2,7 @@
 
 *DNS over TLS upstream server connected to DNS over TLS (IPv4 and IPv6) servers with DNSSEC, DNS rebinding protection, built-in Docker healthcheck and fine grain IPs + hostnames blocking*
 
-**Announcement**: *Total rewrite in Go: see the new features [below](#Features)* (in case something break, use the image with tag `:shell`)
+**Announcement**: *Auto update every 24 hours of block lists and cryptographic files*
 
 [![Cloudflare DNS over TLS Docker](https://github.com/qdm12/cloudflare-dns-server/raw/master/readme/title.png)](https://hub.docker.com/r/qmcgaw/cloudflare-dns-server)
 
@@ -36,7 +36,8 @@
 - Block custom hostnames and IP addresses using environment variables
 - **One line setup**
 - Runs without root
-- Small 39.4MB Docker image (uncompressed, amd64)
+- Small 41.3MB Docker image (uncompressed, amd64)
+- Auto updates block list files and cryptographic files every 24 hours (and restarts Unbound in ~ 1 second)
 
     <details><summary>Click to show base components</summary><p>
 
@@ -47,7 +48,7 @@
 
     </p></details>
 
-- Resolves using IPv4 and IPv6 when available
+- Resolves using IPv4 and IPv6 (if turned on)
 - Compatible with amd64, i686 (32 bit), **ARM** 64 bit, ARM 32 bit v7 and ppc64le 🎆
 - DNS rebinding protection
 - DNSSEC Validation

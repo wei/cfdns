@@ -2,9 +2,9 @@ package constants
 
 const (
 	// Announcement is a message announcement
-	Announcement = "Supports IPv6 DNS resolution"
+	Announcement = "Auto update every 24 hours of block lists and cryptographic files"
 	// AnnouncementExpiration is the expiration date of the announcement in format yyyy-mm-dd
-	AnnouncementExpiration = "2020-04-02"
+	AnnouncementExpiration = "2020-06-01"
 )
 
 const (

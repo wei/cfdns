@@ -12,6 +12,7 @@ import (
 	"github.com/qdm12/cloudflare-dns-server/internal/constants"
 	"github.com/qdm12/cloudflare-dns-server/internal/dns"
 	"github.com/qdm12/cloudflare-dns-server/internal/healthcheck"
+	"github.com/qdm12/cloudflare-dns-server/internal/models"
 	"github.com/qdm12/cloudflare-dns-server/internal/params"
 	"github.com/qdm12/cloudflare-dns-server/internal/settings"
 	"github.com/qdm12/cloudflare-dns-server/internal/splash"
@@ -65,37 +66,54 @@ func main() {
 	}
 	logger.Info("Settings summary:\n" + settings.String())
 
-	streamMerger := command.NewStreamMerger()
-	go streamMerger.CollectLines(ctx,
-		func(line string) { logger.Info(line) },
-		func(err error) { logger.Error(err) })
-
-	initialDNSToUse := constants.ProviderMapping()[settings.Providers[0]]
-	dnsConf.UseDNSInternally(initialDNSToUse.IPs[0])
-	if err := dnsConf.DownloadRootHints(); err != nil {
-		logger.Error(err)
-		os.Exit(1)
-	}
-	if err := dnsConf.DownloadRootKey(); err != nil {
-		logger.Error(err)
-		os.Exit(1)
-	}
-	if err := dnsConf.MakeUnboundConf(settings); err != nil {
-		logger.Error(err)
-		os.Exit(1)
-	}
-	stream, wait, err := dnsConf.Start(ctx, settings.VerbosityDetailsLevel)
-	if err != nil {
-		logger.Error(err)
-		os.Exit(1)
-	}
-	go streamMerger.Merge(ctx, stream, command.MergeName("unbound"))
-	dnsConf.UseDNSInternally(net.IP{127, 0, 0, 1})
-	if settings.CheckUnbound {
-		if err := dnsConf.WaitForUnbound(); err != nil {
-			logger.Error(err)
+	// Use plain DNS first internally to resolve github.com
+	targetDNS := constants.ProviderMapping()[settings.Providers[0]]
+	var targetIP net.IP
+	for _, targetIP = range targetDNS.IPs {
+		if settings.IPv6 && targetIP.To4() == nil {
+			break
+		} else if !settings.IPv6 && targetIP.To4() != nil {
+			break
 		}
 	}
+	dnsConf.UseDNSInternally(targetIP)
+
+	streamMerger := command.NewStreamMerger()
+	go streamMerger.CollectLines(ctx,
+		func(line string) { logger.Info(line) },        //nolint:scopelint
+		func(mergeErr error) { logger.Warn(mergeErr) }) //nolint:scopelint
+
+	// Unbound run loop
+	unboundFinished, signalUnboundFinished := context.WithCancel(context.Background())
+	go func() {
+		unboundCtx, unboundCancel := context.WithCancel(ctx)
+		defer unboundCancel()
+		for ctx.Err() == nil {
+			var setupError, startError, waitError error
+			unboundCtx, unboundCancel, setupError, startError, waitError = unboundRun(
+				ctx, unboundCtx, unboundCancel, dnsConf, settings, streamMerger)
+			switch {
+			case setupError != nil:
+				logger.Warn(setupError)
+				const duration = time.Minute
+				logger.Info("Retrying in %s", duration)
+				select {
+				case <-time.After(duration):
+				case <-ctx.Done():
+				}
+			case startError != nil:
+				logger.Error(startError)
+				cancel()
+				os.Exit(1)
+			case unboundCtx.Err() == context.DeadlineExceeded:
+				logger.Info("attempting planned restart")
+			case waitError != nil:
+				logger.Warn(waitError)
+			}
+		}
+		logger.Info("shutting down")
+		signalUnboundFinished()
+	}()
 
 	signalsCh := make(chan os.Signal, 1)
 	signal.Notify(signalsCh,
@@ -110,7 +128,35 @@ func main() {
 	case <-ctx.Done():
 		logger.Warn("context canceled, shutting down")
 	}
-	if err := wait(); err != nil {
-		logger.Error(err)
+	<-unboundFinished.Done()
+}
+
+func unboundRun(ctx, unboundCtx context.Context, unboundCancel context.CancelFunc,
+	conf dns.Configurator, settings models.Settings, streamMerger command.StreamMerger) (
+	newUnboundCtx context.Context, newUnboundCancel context.CancelFunc,
+	setupError, startError, waitError error) {
+	if err := conf.DownloadRootHints(); err != nil {
+		return unboundCtx, unboundCancel, err, nil, nil
 	}
+	if err := conf.DownloadRootKey(); err != nil {
+		return unboundCtx, unboundCancel, err, nil, nil
+	}
+	if err := conf.MakeUnboundConf(settings); err != nil {
+		return unboundCtx, unboundCancel, err, nil, nil
+	}
+	unboundCancel()
+	newUnboundCtx, newUnboundCancel = context.WithTimeout(ctx, 24*time.Hour)
+	stream, wait, err := conf.Start(newUnboundCtx, settings.VerbosityDetailsLevel)
+	if err != nil {
+		return newUnboundCtx, newUnboundCancel, nil, err, nil
+	}
+	go streamMerger.Merge(newUnboundCtx, stream, command.MergeName("unbound"))
+	conf.UseDNSInternally(net.IP{127, 0, 0, 1})
+	if settings.CheckUnbound {
+		if err := conf.WaitForUnbound(); err != nil {
+			return newUnboundCtx, newUnboundCancel, nil, err, nil
+		}
+	}
+	waitError = wait()
+	return newUnboundCtx, newUnboundCancel, nil, nil, waitError
 }
